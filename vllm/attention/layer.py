@@ -573,12 +573,6 @@ class MultiHeadAttention(nn.Module):
             query, key, value = (x.transpose(1, 2) for x in (query, key, value))
             out = F.scaled_dot_product_attention(query, key, value, scale=self.scale)
             out = out.transpose(1, 2)
-        elif self.attn_backend == AttentionBackendEnum.PALLAS:
-            query, key, value = (x.transpose(1, 2) for x in (query, key, value))
-            from torch_xla.experimental.custom_kernel import flash_attention
-
-            out = flash_attention(query, key, value, sm_scale=self.scale)
-            out = out.transpose(1, 2)
         else:
             # ViT attention hasn't supported this backend yet
             raise NotImplementedError(
