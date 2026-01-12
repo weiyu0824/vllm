@@ -39,7 +39,7 @@ class CompressedTensorsW8A8Int8(CompressedTensorsScheme):
         # turing and up
         return 75
 
-    def create_weights(
+    def create_weight(
         self,
         layer: torch.nn.Module,
         output_partition_sizes: list[int],
@@ -48,8 +48,13 @@ class CompressedTensorsW8A8Int8(CompressedTensorsScheme):
         weight_loader: Callable,
         **kwargs,
     ):
-        layer.logical_widths = output_partition_sizes
-
+        self._register_parameters(layer, output_partition_sizes, input_size_per_partition, params_dtype, weight_loader, **kwargs)
+        self._init_kernel(**kwargs)
+        
+    def _init_kernel(
+        self,
+        **kwargs,
+    ):
         scaled_mm_linear_kernel_config = ScaledMMLinearLayerConfig(
             is_channelwise=(self.strategy == QuantizationStrategy.CHANNEL),
             is_static_input_scheme=self.is_static_input_scheme,
@@ -61,6 +66,26 @@ class CompressedTensorsW8A8Int8(CompressedTensorsScheme):
         if kernel_type.__name__ not in self._kernel_backends_being_used:
             logger.info("Using %s for CompressedTensorsW8A8Int8", kernel_type.__name__)
             self._kernel_backends_being_used.add(kernel_type.__name__)
+
+        self.kernel = kernel_type(
+            c=scaled_mm_linear_kernel_config,
+            w_q_param_name="weight",
+            w_s_param_name="weight_scale",
+            i_s_param_name="input_scale",
+            i_zp_param_name="input_zero_point",
+            azp_adj_param_name="azp_adj",
+        )
+         
+    def _register_parameters(
+        self,
+        layer: torch.nn.Module,
+        output_partition_sizes: list[int],
+        input_size_per_partition: int,
+        params_dtype: torch.dtype,
+        weight_loader: Callable,
+        **kwargs,
+    ):
+        layer.logical_widths = output_partition_sizes
 
         # WEIGHT
         weight = ModelWeightParameter(
@@ -104,16 +129,7 @@ class CompressedTensorsW8A8Int8(CompressedTensorsScheme):
                     data=torch.empty(1, dtype=torch.int8), weight_loader=weight_loader
                 )
                 layer.register_parameter("input_zero_point", input_zero_point)
-
-        self.kernel = kernel_type(
-            c=scaled_mm_linear_kernel_config,
-            w_q_param_name="weight",
-            w_s_param_name="weight_scale",
-            i_s_param_name="input_scale",
-            i_zp_param_name="input_zero_point",
-            azp_adj_param_name="azp_adj",
-        )
-
+        
     # Checkpoints are serialized in compressed-tensors format, which is
     # different from the format the kernel may want. Handle repacking here.
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
